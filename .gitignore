@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 本地工具缓存
+.qoder-office-pptx-locks/
+
+# 个人教学资料（不随代码仓库公开）
+教学方案.md
+ESP技术演进史.pptx
+build-deck.cjs
+deck-pages.json

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP 车身电子稳定系统 - 教学模拟</title>
+  <link rel="stylesheet" href="css/style.css">
+  <!-- CDN 依赖 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- ===== 顶部栏 ===== -->
+    <header class="header">
+      <div class="header__logo">
+        <div class="header__logo-icon">ESP</div>
+        <h1 class="header__title">Electronic Stability Program</h1>
+      </div>
+
+      <div class="header__separator"></div>
+
+      <div class="header__controls">
+        <!-- 技术世代选择器 -->
+        <div class="header__control-group">
+          <span class="header__label">技术世代</span>
+          <select class="era-select" id="era-select" title="切换底盘电子系统世代，自动应用推荐路面并回原点">
+            <option value="bare">第 1 代 · 裸车（1978 前）</option>
+            <option value="abs">第 2 代 · ABS（1978）</option>
+            <option value="ebd">第 3 代 · +EBD（80 年代末）</option>
+            <option value="asr">第 4 代 · +ASR（1986）</option>
+            <option value="esp" selected>第 5 代 · +ESP（1995）</option>
+            <option value="tv">第 6 代 · 扭矩矢量（电驱）</option>
+          </select>
+        </div>
+
+        <div class="header__separator"></div>
+
+        <!-- 障碍物操作提示 + 回到原点 -->
+        <div class="header__control-group">
+          <span class="header__hint">📌 点击地图放置障碍物</span>
+          <!-- 回到原点：车辆传送回 (0,0)，不改变障碍物布局 -->
+          <button class="btn" id="reset-position-btn" title="车辆回到原点 (0,0)，速度归零，碰撞解除">🏠 回原点</button>
+        </div>
+
+        <div class="header__separator"></div>
+
+        <!-- ESP 开关 -->
+        <div class="header__control-group">
+          <span class="header__label">ESP</span>
+          <label class="esp-toggle">
+            <input type="checkbox" id="esp-toggle-input" checked>
+            <span class="esp-toggle__track"></span>
+            <span class="esp-toggle__thumb"></span>
+          </label>
+        </div>
+
+        <div class="header__separator"></div>
+
+        <!-- 路面选择 -->
+        <div class="header__control-group">
+          <span class="header__label">路面</span>
+          <div class="road-btn-group">
+            <button class="road-btn" data-mu="0.2">冰面 μ0.2</button>
+            <button class="road-btn" data-mu="0.5">湿滑 μ0.5</button>
+            <button class="road-btn active" data-mu="0.9">干燥 μ0.9</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ===== 主内容三栏 ===== -->
+    <main class="main-content">
+      <!-- 左栏：驾驶输入 -->
+      <aside class="panel panel--left">
+        <div id="controls-container"></div>
+      </aside>
+
+      <!-- 中栏：Canvas + 图表 -->
+      <section class="panel panel--center">
+        <!-- 车辆俯视动画 -->
+        <div class="canvas-area">
+          <canvas id="vehicle-canvas"></canvas>
+          <!-- HUD 覆盖层 -->
+          <div class="canvas-hud">
+            <div class="hud-item hud-item--speed" id="hud-speed">0 km/h</div>
+            <div class="hud-item" id="hud-scenario">手动放置模式</div>
+            <div class="hud-item hud-item--mu" id="hud-mu">μ = 0.9</div>
+            <div class="hud-item hud-item--collision" id="hud-collision" style="display:none; border-left-color: #d94f4f; color: #d94f4f; font-weight:700;">⚠ 碰撞!</div>
+          </div>
+        </div>
+        <!-- 实时曲线 -->
+        <div class="charts-area" id="charts-container"></div>
+      </section>
+
+      <!-- 右栏：传感器面板 -->
+      <aside class="panel panel--right">
+        <!-- 四轮轮速 -->
+        <div class="panel__section">
+          <div class="panel__section-title">车轮转速</div>
+          <div class="sensor-grid">
+            <div class="sensor-item">
+              <div class="sensor-item__label">FL 前左 <span class="wheel-lock" id="lock-fl" style="display:none">抱死</span></div>
+              <div class="sensor-item__value" id="sensor-wheel-fl">0.0 <span class="sensor-item__unit">km/h</span></div>
+            </div>
+            <div class="sensor-item">
+              <div class="sensor-item__label">FR 前右 <span class="wheel-lock" id="lock-fr" style="display:none">抱死</span></div>
+              <div class="sensor-item__value" id="sensor-wheel-fr">0.0 <span class="sensor-item__unit">km/h</span></div>
+            </div>
+            <div class="sensor-item">
+              <div class="sensor-item__label">RL 后左 <span class="wheel-lock" id="lock-rl" style="display:none">抱死</span></div>
+              <div class="sensor-item__value" id="sensor-wheel-rl">0.0 <span class="sensor-item__unit">km/h</span></div>
+            </div>
+            <div class="sensor-item">
+              <div class="sensor-item__label">RR 后右 <span class="wheel-lock" id="lock-rr" style="display:none">抱死</span></div>
+              <div class="sensor-item__value" id="sensor-wheel-rr">0.0 <span class="sensor-item__unit">km/h</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底盘系统状态（随时代配置） -->
+        <div class="panel__section">
+          <div class="panel__section-title">底盘系统</div>
+          <div class="sys-badge-row" id="sys-badges">
+            <span class="sys-badge" id="sys-badge-abs" data-on="false">ABS</span>
+            <span class="sys-badge" id="sys-badge-ebd" data-on="false">EBD</span>
+            <span class="sys-badge" id="sys-badge-asr" data-on="false">ASR</span>
+            <span class="sys-badge" id="sys-badge-esp" data-on="false">ESP</span>
+            <span class="sys-badge" id="sys-badge-tv" data-on="false">扭矩矢量</span>
+          </div>
+          <div class="sys-status-line" id="sys-status-line">待命</div>
+        </div>
+
+        <!-- 核心传感器 -->
+        <div class="panel__section">
+          <div class="panel__section-title">传感器</div>
+          <div class="sensor-grid">
+            <div class="sensor-item sensor-item--full">
+              <div class="sensor-item__label">横摆角速度</div>
+              <div class="sensor-item__value" id="sensor-yaw-rate">0.00 <span class="sensor-item__unit">deg/s</span></div>
+            </div>
+            <div class="sensor-item">
+              <div class="sensor-item__label">侧向加速度</div>
+              <div class="sensor-item__value" id="sensor-lat-accel">0.00 <span class="sensor-item__unit">m/s²</span></div>
+            </div>
+            <div class="sensor-item">
+              <div class="sensor-item__label">方向盘转角</div>
+              <div class="sensor-item__value" id="sensor-steering">0.0 <span class="sensor-item__unit">deg</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 制动压力 -->
+        <div class="panel__section">
+          <div class="panel__section-title">制动压力</div>
+          <div class="brake-bars">
+            <div class="brake-bar">
+              <div class="brake-bar__label">FL</div>
+              <div class="brake-bar__track">
+                <div class="brake-bar__fill" id="brake-fill-fl"></div>
+              </div>
+              <div class="brake-bar__value" id="brake-val-fl">0 bar</div>
+            </div>
+            <div class="brake-bar">
+              <div class="brake-bar__label">FR</div>
+              <div class="brake-bar__track">
+                <div class="brake-bar__fill" id="brake-fill-fr"></div>
+              </div>
+              <div class="brake-bar__value" id="brake-val-fr">0 bar</div>
+            </div>
+            <div class="brake-bar">
+              <div class="brake-bar__label">RL</div>
+              <div class="brake-bar__track">
+                <div class="brake-bar__fill" id="brake-fill-rl"></div>
+              </div>
+              <div class="brake-bar__value" id="brake-val-rl">0 bar</div>
+            </div>
+            <div class="brake-bar">
+              <div class="brake-bar__label">RR</div>
+              <div class="brake-bar__track">
+                <div class="brake-bar__fill" id="brake-fill-rr"></div>
+              </div>
+              <div class="brake-bar__value" id="brake-val-rr">0 bar</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ESP 介入指示 -->
+        <div class="panel__section">
+          <div class="panel__section-title">ESP 介入</div>
+          <div class="esp-intervention">
+            <div class="esp-moment-display">
+              <span class="esp-moment-value" id="esp-moment-value">0</span>
+              <span class="esp-moment-unit">N·m 横摆力矩</span>
+            </div>
+            <div class="esp-target-wheel" id="esp-target-wheel">无介入</div>
+            <!-- 制动力分配 -->
+            <div class="force-distribution">
+              <div class="force-wheel" id="force-fl">FL</div>
+              <div class="force-center">车辆</div>
+              <div class="force-wheel" id="force-fr">FR</div>
+              <div class="force-wheel" id="force-rl">RL</div>
+              <div class="force-wheel" id="force-rr">RR</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ===== 底部状态栏 ===== -->
+    <footer class="footer">
+      <div class="footer__item">
+        <span class="footer__dot" id="connection-dot"></span>
+        <span id="footer-connection">已连接</span>
+      </div>
+      <div class="footer__item">
+        <span class="footer__value" id="footer-time">T: 0.00s</span>
+      </div>
+      <div class="footer__item">
+        <span class="footer__value" id="footer-speed">0.0 km/h</span>
+      </div>
+      <div class="footer__item">
+        <span class="footer__value" id="footer-esp" style="color: #5a9e6f">ESP ON</span>
+      </div>
+      <div class="footer__item">
+        <span class="footer__value" id="footer-scenario">手动放置</span>
+      </div>
+      <div class="footer__spacer"></div>
+      <button class="btn footer__btn" id="footer-reset-btn">↺ 重置仿真</button>
+    </footer>
+  </div>
+
+  <!-- JS 加载顺序：依赖库 -> 组件 -> 主控 -->
+  <script src="js/vehicle-canvas.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/controls.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
